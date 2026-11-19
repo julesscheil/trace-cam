@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Trace Cam</title>
+<link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@600&family=Pacifico&family=Playfair+Display:wght@700&family=Bebas+Neue&family=Great+Vibes&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: -apple-system, system-ui, sans-serif; color: #fff; touch-action: none; }
+  #video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  #stage { position: fixed; inset: 0; }
+  #overlay { position: absolute; left: 50%; top: 50%; transform-origin: center; pointer-events: none; user-select: none; white-space: nowrap; line-height: 1; }
+  #overlay img { display: block; max-width: 80vw; max-height: 60vh; }
+  #overlayText { font-size: 160px; color: #000; }
+  .bar { position: fixed; left: 0; right: 0; padding: 10px 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; background: rgba(0,0,0,.55); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); z-index: 5; }
+  #top { top: 0; padding-top: calc(10px + env(safe-area-inset-top)); }
+  #bottom { bottom: 0; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+  button, select, .filebtn { background: rgba(255,255,255,.15); color: #fff; border: 1px solid rgba(255,255,255,.25); border-radius: 10px; padding: 9px 12px; font-size: 15px; font-family: inherit; }
+  button.on { background: #ffcc33; color: #000; border-color: #ffcc33; }
+  input[type=text] { flex: 1; min-width: 120px; font-size: 17px; padding: 9px 10px; border-radius: 10px; border: none; }
+  input[type=range] { flex: 1; min-width: 100px; accent-color: #ffcc33; }
+  label.small { font-size: 13px; opacity: .85; }
+  .filebtn input { display: none; }
+  #hidden.bar { display: none; }
+  #showBtn { position: fixed; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); z-index: 6; display: none; opacity: .6; }
+  #msg { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 30px; z-index: 10; background: #111; flex-direction: column; gap: 16px; }
+  #msg p { max-width: 340px; line-height: 1.45; opacity: .9; }
+  #msg button { font-size: 18px; padding: 14px 22px; background: #ffcc33; color: #000; border: none; }
+  .row { display: flex; gap: 8px; width: 100%; align-items: center; justify-content: center; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<video id="video" playsinline autoplay muted></video>
+<div id="stage">
+  <div id="overlay"><span id="overlayText">A</span></div>
+</div>
+
+<div id="top" class="bar">
+  <div class="row">
+    <input id="textIn" type="text" value="A" placeholder="Type a letter or word" autocomplete="off">
+    <label class="filebtn">🖼️ Image<input id="fileIn" type="file" accept="image/*"></label>
+  </div>
+  <div class="row">
+    <select id="fontSel">
+      <option value="Georgia, serif">Serif</option>
+      <option value="Helvetica, Arial, sans-serif">Sans</option>
+      <option value="'Playfair Display', serif">Playfair</option>
+      <option value="'Bebas Neue', sans-serif">Block</option>
+      <option value="'Dancing Script', cursive">Script</option>
+      <option value="'Great Vibes', cursive">Fancy script</option>
+      <option value="'Pacifico', cursive">Bubbly</option>
+    </select>
+    <button id="outlineBtn">Outline</button>
+    <button id="colorBtn">Black</button>
+  </div>
+</div>
+
+<div id="bottom" class="bar">
+  <div class="row">
+    <label class="small">See-through</label>
+    <input id="opacity" type="range" min="5" max="100" value="55">
+  </div>
+  <div class="row">
+    <button id="lockBtn">🔓 Lock</button>
+    <button id="mirrorBtn">⇋ Flip</button>
+    <button id="resetBtn">Reset</button>
+    <button id="hideBtn">Hide menus</button>
+  </div>
+</div>
+<button id="showBtn">☰</button>
+
+<div id="msg">
+  <h2 style="margin:0">Trace Cam</h2>
+  <p>Hold your phone above your paper. You'll see the paper through the camera with your letter on top.<br><br>Drag to move · pinch to resize and rotate · Lock when it's lined up.</p>
+  <button id="startBtn">Start camera</button>
+  <p id="err" style="color:#ff8a80"></p>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const video = $('video'), overlay = $('overlay'), stage = $('stage');
+let state = { x: 0, y: 0, scale: 1, rot: 0, mirror: false };
+let locked = false, outline = false, colorIdx = 0, wakeLock = null;
+const colors = [['Black','#000'],['White','#fff'],['Red','#ff2d2d'],['Blue','#2d6bff']];
+
+function apply() {
+  overlay.style.transform =
+    `translate(-50%,-50%) translate(${state.x}px,${state.y}px) rotate(${state.rot}rad) scale(${state.scale * (state.mirror ? -1 : 1)}, ${state.scale})`;
+}
+function styleText() {
+  const t = $('overlayText'); if (!t) return;
+  const c = colors[colorIdx][1];
+  t.style.fontFamily = $('fontSel').value;
+  if (outline) { t.style.color = 'transparent'; t.style.webkitTextStroke = `3px ${c}`; }
+  else { t.style.color = c; t.style.webkitTextStroke = '0'; }
+}
+apply(); styleText();
+
+// Camera
+async function startCam() {
+  $('err').textContent = '';
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false
+    });
+    video.srcObject = stream;
+    $('msg').style.display = 'none';
+    keepAwake();
+  } catch (e) {
+    $('err').textContent = (!window.isSecureContext)
+      ? "The camera only works when this page is opened from an https:// address (not straight from Files). See the setup note."
+      : "Couldn't open the camera: " + (e.message || e.name) + ". Check that camera access is allowed for this browser.";
+  }
+}
+async function keepAwake() {
+  try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && video.srcObject) keepAwake(); });
+$('startBtn').onclick = startCam;
+
+// Content
+$('textIn').addEventListener('input', e => {
+  overlay.innerHTML = '<span id="overlayText"></span>';
+  $('overlayText').textContent = e.target.value || ' ';
+  styleText();
+});
+$('fileIn').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) return;
+  const img = new Image(); img.src = URL.createObjectURL(f);
+  overlay.innerHTML = ''; overlay.appendChild(img);
+});
+$('fontSel').onchange = styleText;
+$('outlineBtn').onclick = () => { outline = !outline; $('outlineBtn').classList.toggle('on', outline); styleText(); };
+$('colorBtn').onclick = () => { colorIdx = (colorIdx + 1) % colors.length; $('colorBtn').textContent = colors[colorIdx][0]; styleText(); };
+$('opacity').oninput = e => overlay.style.opacity = e.target.value / 100;
+overlay.style.opacity = .55;
+
+// Controls
+$('lockBtn').onclick = () => { locked = !locked; $('lockBtn').textContent = locked ? '🔒 Locked' : '🔓 Lock'; $('lockBtn').classList.toggle('on', locked); };
+$('mirrorBtn').onclick = () => { state.mirror = !state.mirror; apply(); };
+$('resetBtn').onclick = () => { state = { x: 0, y: 0, scale: 1, rot: 0, mirror: false }; apply(); };
+$('hideBtn').onclick = () => { $('top').style.display = 'none'; $('bottom').style.display = 'none'; $('showBtn').style.display = 'block'; };
+$('showBtn').onclick = () => { $('top').style.display = ''; $('bottom').style.display = ''; $('showBtn').style.display = 'none'; };
+$('textIn').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); });
+
+// Gestures: one finger drags, two fingers pinch + rotate
+const pts = new Map(); let start = null;
+function snapshot() {
+  const p = [...pts.values()];
+  if (p.length === 1) return { mode: 1, x: p[0].x, y: p[0].y, s: { ...state } };
+  const [a, b] = p;
+  return { mode: 2, d: Math.hypot(b.x - a.x, b.y - a.y), ang: Math.atan2(b.y - a.y, b.x - a.x),
+           cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, s: { ...state } };
+}
+stage.addEventListener('pointerdown', e => {
+  if (locked) return;
+  stage.setPointerCapture(e.pointerId);
+  pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pts.size <= 2) start = snapshot();
+});
+stage.addEventListener('pointermove', e => {
+  if (locked || !pts.has(e.pointerId)) return;
+  pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (!start) return;
+  const p = [...pts.values()];
+  if (start.mode === 1 && p.length === 1) {
+    state.x = start.s.x + p[0].x - start.x; state.y = start.s.y + p[0].y - start.y;
+  } else if (start.mode === 2 && p.length >= 2) {
+    const [a, b] = p;
+    const d = Math.hypot(b.x - a.x, b.y - a.y), ang = Math.atan2(b.y - a.y, b.x - a.x);
+    state.scale = Math.max(0.05, Math.min(20, start.s.scale * d / start.d));
+    state.rot = start.s.rot + ang - start.ang;
+    state.x = start.s.x + (a.x + b.x) / 2 - start.cx; state.y = start.s.y + (a.y + b.y) / 2 - start.cy;
+  }
+  apply();
+});
+function end(e) { pts.delete(e.pointerId); start = pts.size ? snapshot() : null; }
+stage.addEventListener('pointerup', end); stage.addEventListener('pointercancel', end);
+// Desktop: scroll wheel resizes
+stage.addEventListener('wheel', e => { if (locked) return; e.preventDefault(); state.scale = Math.max(.05, state.scale * (e.deltaY < 0 ? 1.08 : 0.93)); apply(); }, { passive: false });
+</script>
+</body>
+</html>
